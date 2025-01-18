@@ -24,6 +24,25 @@ def home():
     return jsonify({"status": "healthy", "message": "Sentiment Analysis API is running"})
 
 # Your existing routes here...
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    """Endpoint to handle file uploads."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['file']
+
+    # Validate file
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    # Save file to the UPLOAD_FOLDER
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+    try:
+        file.save(file_path)
+        return jsonify({'filepath': file_path}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 def chunk_text(text, max_length=512):
     """Split text into chunks that respect sentence boundaries when possible."""
