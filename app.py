@@ -6,12 +6,13 @@ from flask_cors import CORS
 import numpy as np
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)
 
 # Configure upload folder
-UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', './uploaded_files')
+UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/tmp/uploaded_files')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Initialize the model
 MODEL_NAME = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
