@@ -1,72 +1,53 @@
 from flask import Flask, request, jsonify
 from textblob import TextBlob
-from transformers import pipeline, AutoTokenizer
-import os
 from flask_cors import CORS
+import os
+import requests
+from typing import List, Dict
 import numpy as np
 
 app = Flask(__name__)
 CORS(app)
 
-# Configure upload folder
-UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/tmp/uploaded_files')
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+# Hugging Face API configuration
+HF_API_TOKEN = os.getenv('HF_API_TOKEN')  # Make sure to set this in your environment variables
+API_URL = "https://api-inference.huggingface.co/models/distilbert-base-uncased-finetuned-sst-2-english"
+HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 
-# Initialize the model
-MODEL_NAME = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
-sentiment_pipeline = pipeline("sentiment-analysis", model=MODEL_NAME)
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-@app.route('/')
-def home():
-    return jsonify({"status": "healthy", "message": "Sentiment Analysis API is running"})
-
-# Your existing routes here...
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    """Endpoint to handle file uploads."""
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-
-    file = request.files['file']
-
-    # Validate file
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-
-    # Save file to the UPLOAD_FOLDER
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+def query_huggingface_api(texts: List[str]) -> List[Dict]:
+    """Send request to Hugging Face API and return predictions."""
     try:
-        file.save(file_path)
-        return jsonify({'filepath': file_path}), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        response = requests.post(API_URL, headers=HEADERS, json={"inputs": texts})
+        response.raise_for_status()  # Raise exception for bad status codes
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"API request failed: {str(e)}")
 
-def chunk_text(text, max_length=512):
-    """Split text into chunks that respect sentence boundaries when possible."""
+def chunk_text(text: str, max_length: int = 1000) -> List[str]:
+    """Split text into chunks that respect sentence boundaries."""
     sentences = [s.strip() for s in text.split('.') if s.strip()]
     chunks = []
     current_chunk = []
     current_length = 0
     
     for sentence in sentences:
-        sentence_tokens = len(tokenizer.encode(sentence))
-        
-        if current_length + sentence_tokens <= max_length:
+        if current_length + len(sentence) <= max_length:
             current_chunk.append(sentence)
-            current_length += sentence_tokens
+            current_length += len(sentence)
         else:
             if current_chunk:
                 chunks.append('. '.join(current_chunk) + '.')
             current_chunk = [sentence]
-            current_length = sentence_tokens
+            current_length = len(sentence)
     
     if current_chunk:
         chunks.append('. '.join(current_chunk) + '.')
     
     return chunks
+
+@app.route('/')
+def home():
+    return jsonify({"status": "healthy", "message": "Sentiment Analysis API is running"})
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_sentiment():
@@ -80,6 +61,7 @@ def analyze_sentiment():
         method = data.get('method', 'textblob').lower()
 
         if method == 'textblob':
+            # TextBlob analysis remains unchanged as it's lightweight
             analysis = TextBlob(text)
             sentiment = analysis.sentiment
             result = {
@@ -94,15 +76,23 @@ def analyze_sentiment():
             }
 
         elif method == 'transformers':
+            # Split text into manageable chunks
             chunks = chunk_text(text)
+            
+            # Get predictions from Hugging Face API
+            predictions = query_huggingface_api(chunks)
+            
+            # Process results
             chunk_results = []
-            for chunk in chunks:
-                chunk_result = sentiment_pipeline(chunk)[0]
+            for pred in predictions:
+                # Extract the sentiment with highest score
+                sentiment = max(pred, key=lambda x: x['score'])
                 chunk_results.append({
-                    'label': chunk_result['label'],
-                    'score': chunk_result['score']
+                    'label': sentiment['label'],
+                    'score': sentiment['score']
                 })
             
+            # Calculate statistics
             positive_chunks = sum(1 for r in chunk_results if r['label'] == 'POSITIVE')
             negative_chunks = sum(1 for r in chunk_results if r['label'] == 'NEGATIVE')
             
@@ -126,8 +116,7 @@ def analyze_sentiment():
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    
-    
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
